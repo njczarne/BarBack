@@ -1,0 +1,13 @@
+{
+  "Classic Rum & Coke": ["Rum", "Coke"],
+  "Tequila Sunrise Twist": ["Tequila", "Cranberry juice", "Lime juice"],
+  "Cranberry Cooler": ["Cranberry juice", "Soda water"],
+  "Island Breeze": ["Rum", "Cranberry juice", "Lime juice"],
+  "Cuba Libre": ["Rum", "Coke", "Lime juice"],
+  "Sparkling Tequila Fizz": ["Tequila", "Soda water", "Lime juice"],
+  "Rum Splash": ["Rum", "Cranberry juice", "Soda water"],
+  "Lime Cran Spritz": ["Cranberry juice", "Lime juice", "Soda water"],
+  "Simple Tequila Shot": ["Tequila", "Lime juice"],
+  "Cran-Coke Fusion": ["Cranberry juice", "Coke"],
+  "Rummy Bubbles": ["Rum", "Soda water", "Lime juice"]
+}

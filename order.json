@@ -1,0 +1,11 @@
+{
+    "name": "Cranberry Cooler",
+    "recipe": [
+        {
+            "Cran juice": 4
+        },
+        {
+            "Soda water": 2
+        }
+    ]
+}

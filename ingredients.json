@@ -1,0 +1,53 @@
+{
+  "Classic Rum & Coke": [
+    {"Rum": 1.5},
+    {"Coke": 4}
+  ],
+  "Tequila Sunrise Twist": [
+    {"Tequila": 1.5},
+    {"Cran juice": 3},
+    {"Lime juice": 0.5}
+  ],
+  "Cranberry Cooler": [
+    {"Cran juice": 4},
+    {"Soda water": 2}
+  ],
+  "Island Breeze": [
+    {"Rum": 1.5},
+    {"Cran juice": 3},
+    {"Lime juice": 0.5}
+  ],
+  "Cuba Libre": [
+    {"Rum": 1.5},
+    {"Coke": 4},
+    {"Lime juice": 0.5}
+  ],
+  "Sparkling Tequila Fizz": [
+    {"Tequila": 1.5},
+    {"Soda water": 3},
+    {"Lime juice": 0.5}
+  ],
+  "Rum Splash": [
+    {"Rum": 1.5},
+    {"Cran juice": 3},
+    {"Soda water": 2}
+  ],
+  "Lime Cran Spritz": [
+    {"Cran juice": 3},
+    {"Lime juice": 0.5},
+    {"Soda water": 2}
+  ],
+  "Simple Tequila Shot": [
+    {"Tequila": 1.5},
+    {"Lime juice": 0.5}
+  ],
+  "Cran-Coke Fusion": [
+    {"Cran juice": 3},
+    {"Coke": 4}
+  ],
+  "Rummy Bubbles": [
+    {"Rum": 1.5},
+    {"Soda water": 3},
+    {"Lime juice": 0.5}
+  ]
+}
