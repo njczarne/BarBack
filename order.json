@@ -1,14 +1,11 @@
 {
-    "name": "Classic Rum & Coke",
+    "name": "Cran-Coke Fusion",
     "recipe": [
         {
-            "Rum": 1.5
+            "Cran juice": 3
         },
         {
             "Coke": 4
-        },
-        {
-            "Lime juice": 0.5
         }
     ]
 }

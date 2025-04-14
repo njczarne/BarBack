@@ -36,16 +36,18 @@ def menu_change(current_drink, input_change):
     
     Only use these ingredients (Do not add any other ingredients, even if the user asks for it):
     Rum, Tequila, Soda water, Coke, Lime juice, Cranberry juice
+    Do not make a drink more than 10 ounces.
     
     Common Transciption errors
     Soda water: "Sort of water", "So the water"
-    Coke: "Cook", "Code"
+    Coke: "Cook", "Code", "Coat"
     Lime: "Line"
     Rum: "Run", "Room", "Ramen"
     Cran Juice: "Fran Jews", "Frank Use"
     Cran: "Creme", "Crumbly"
 
     Respond in this format:
+    Always respond in this format even you  have any errors. If you cannot understand the user, make no changes to the drink
     Do not any additional phrases to "drink_name" (even if you make changes. dont add the word "customized")
     Cleaned: <fixed order>
     Order:
