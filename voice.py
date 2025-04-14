@@ -83,7 +83,7 @@ def listen_until_ending():
 
 
 # --- Main Loop ---
-'''
+
 try:
     while True:
         print(f"🎙️ Waiting for activation phrase: {ACTIVATION_PHRASE}...")
@@ -97,4 +97,3 @@ try:
 except KeyboardInterrupt:
     print("\n🛑 Program stopped.")
 
-'''

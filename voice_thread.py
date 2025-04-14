@@ -1,43 +1,52 @@
 import sounddevice as sd
 import numpy as np
-import wave
+# import wave # No longer needed if not saving temp WAV
 import time
 import re
 import threading
 import queue
 from faster_whisper import WhisperModel
 from voice_leds import turn_on_led, turn_off_led # Assuming this module exists and works
+import sys
 
 # --- Config ---
 ACTIVATION_PHRASE = "wake up"
 ENDING_PHRASE = "thank you"
 SAMPLERATE = 16000  # Whisper works best with 16kHz
 CHANNELS = 1
-CHUNK_DURATION = 0.5 # Process audio in smaller chunks (seconds)
-PROCESS_DURATION = 5   # Transcribe chunks of this duration (seconds)
-TEMP_FILENAME = "temp_command.wav" # Still needed for saving full command if desired
-DEVICE = "cpu" # or "cuda" if you have Nvidia GPU + libraries
-COMPUTE_TYPE = "int8" # or "float16" for GPU
+CHUNK_DURATION = 0.5
+PROCESS_DURATION = 3   # Use tuned duration
+# TEMP_FILENAME = "temp_command.wav" # Not used in this version
+DEVICE = "cpu"
+COMPUTE_TYPE = "int8"
+MODEL_NAME = "tiny.en" # Faster, less accurate
+# MODEL_NAME = "base.en" # Slower, more accurate
+BUFFER_OVERLAP_SECONDS = PROCESS_DURATION / 2.0
+IDLE_TIMEOUT_SECONDS = 10.0
 
-# Calculate chunk sizes
+# Calculate sample sizes
 CHUNK_SAMPLES = int(CHUNK_DURATION * SAMPLERATE)
 PROCESS_SAMPLES = int(PROCESS_DURATION * SAMPLERATE)
+OVERLAP_SAMPLES = int(BUFFER_OVERLAP_SECONDS * SAMPLERATE)
+if OVERLAP_SAMPLES < 0: OVERLAP_SAMPLES = 0 # Ensure non-negative overlap
 
 # --- Shared Resources ---
 audio_queue = queue.Queue()
-result_queue = queue.Queue() # To communicate results back to main thread
+result_queue = queue.Queue()
 stop_event = threading.Event()
-is_listening = threading.Event() # Flag to indicate if we are actively listening for commands
+is_listening = threading.Event() # Controls listen vs. wait state
 
 # --- Load whisper model ---
 print("Loading Whisper model...")
-# Using 'tiny.en' for speed, consider 'base.en' or 'small.en' for better accuracy
-model = WhisperModel("tiny.en", device=DEVICE, compute_type=COMPUTE_TYPE)
-print("Whisper model loaded.")
+try:
+    model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
+    print("Whisper model loaded.")
+except Exception as e:
+    print(f"Error loading Whisper model: {e}")
+    sys.exit(1)
 
 # --- Helper Functions ---
 def normalize(text):
-    """Removes punctuation and converts to lowercase."""
     return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
 # --- Thread Functions ---
@@ -47,20 +56,15 @@ def record_audio(stop_event, audio_queue):
     print("🎙️ Starting recording thread...")
     try:
         def audio_callback(indata, frames, time, status):
-            """This is called (from a separate thread) for each audio block."""
-            if status:
-                print(f"Audio callback status: {status}", file=sys.stderr)
-            # Ensure data is float32, required by Whisper
-            audio_queue.put(indata.copy().astype(np.float32))
+            if status: print(f"Audio callback status warning: {status}", file=sys.stderr)
+            if not stop_event.is_set():
+                audio_queue.put(indata.copy().astype(np.float32))
 
-        with sd.InputStream(samplerate=SAMPLERATE,
-                            channels=CHANNELS,
-                            dtype='float32', # Use float32 directly
-                            blocksize=CHUNK_SAMPLES, # Use smaller blocks for callback
+        with sd.InputStream(samplerate=SAMPLERATE, channels=CHANNELS,
+                            dtype='float32', blocksize=CHUNK_SAMPLES,
                             callback=audio_callback):
-            print("🎧 Recording started. Waiting for stop event...")
-            stop_event.wait() # Keep recording until stop_event is set
-
+            print("🎧 Recording stream active. Waiting for stop event.")
+            stop_event.wait()
     except Exception as e:
         print(f"Error in recording thread: {e}")
     finally:
@@ -68,73 +72,107 @@ def record_audio(stop_event, audio_queue):
 
 
 def transcribe_audio(stop_event, audio_queue, result_queue, is_listening):
-    """Continuously processes audio chunks from the queue and transcribes."""
+    """Continuously processes audio chunks, transcribes, manages state and buffer."""
     print("🧠 Starting transcription thread...")
     audio_buffer = np.array([], dtype=np.float32)
-    full_command_transcript = "" # Accumulates transcript when listening
+    full_command_transcript = ""
+    last_activity_time = time.monotonic()
+    previous_segment_text = "" # For conditioning
 
     try:
         while not stop_event.is_set():
             try:
-                # Get audio data, wait max 1 second if queue is empty
                 chunk = audio_queue.get(timeout=1.0)
                 audio_buffer = np.concatenate((audio_buffer, chunk.flatten()))
+                last_activity_time = time.monotonic()
 
-                # Process when buffer has enough data
-                while len(audio_buffer) >= PROCESS_SAMPLES:
-                    # Take the chunk to process
+                while len(audio_buffer) >= PROCESS_SAMPLES and not stop_event.is_set():
                     process_chunk = audio_buffer[:PROCESS_SAMPLES]
-                    # Keep the remainder (overlap helps catch phrases at boundaries)
-                    # Adjust overlap amount as needed, here keeping half
-                    overlap_samples = PROCESS_SAMPLES // 2
-                    audio_buffer = audio_buffer[PROCESS_SAMPLES - overlap_samples:]
+                    samples_to_keep_after = audio_buffer[PROCESS_SAMPLES - OVERLAP_SAMPLES:]
 
-                    # Transcribe the chunk
-                    # Pass numpy array directly, it's more efficient
+                    # --- Transcribe ---
+                    # Use condition_on_previous_text=True for potentially better coherence
                     segments, info = model.transcribe(process_chunk,
                                                       language="en",
-                                                      beam_size=5,
-                                                      # word_timestamps=True, # Can be useful but slower
-                                                      condition_on_previous_text=False) # Set True for potentially better coherence on longer audio
+                                                      beam_size=2,
+                                                      # Use previous text as prompt for the model
+                                                      initial_prompt=previous_segment_text,
+                                                      condition_on_previous_text=True)
 
-                    segment_text_list = []
-                    found_activation = False
-                    found_ending = False
+                    # --- Process Segments ---
+                    found_activation_in_chunk = False
+                    found_ending_in_chunk = False
+                    current_chunk_texts = [] # Store texts from this chunk
 
                     for segment in segments:
+                        if stop_event.is_set(): break
                         raw_text = segment.text.strip()
+                        if not raw_text: continue
                         normalized = normalize(raw_text)
-                        segment_text_list.append(raw_text)
-                        # print(f"Segment: {raw_text}") # Debug print
+                        current_chunk_texts.append(raw_text) # Keep track of last text in chunk
 
-                        if not is_listening.is_set(): # Looking for activation phrase
+                        # Check state *before* processing
+                        was_listening = is_listening.is_set()
+
+                        if not was_listening: # Looking for activation phrase
                             if ACTIVATION_PHRASE in normalized:
-                                print(f"👂 Heard potential activation: '{raw_text}'")
+                                print(f"[Transcribe] Heard potential activation: '{raw_text}'")
                                 result_queue.put(("ACTIVATION_FOUND", raw_text))
-                                found_activation = True
-                                # Don't break here, finish processing the segment for context
+                                is_listening.set() # <<< SET STATE IMMEDIATELY
+                                found_activation_in_chunk = True
+                                full_command_transcript = "" # Reset command transcript
+                                break # Stop processing segments for this chunk
                         else: # Actively listening for commands
+                            # Accumulate transcript
                             full_command_transcript += raw_text + " "
+                            # Put partial result on queue for main loop to handle/print
                             result_queue.put(("PARTIAL_TRANSCRIPT", raw_text))
-                            if ENDING_PHRASE in normalized:
-                                print(f"👂 Heard potential ending: '{raw_text}'")
-                                result_queue.put(("ENDING_FOUND", full_command_transcript.strip()))
-                                found_ending = True
-                                full_command_transcript = "" # Reset for next command
-                                break # Stop processing segments if ending found
 
-                    if found_ending: break # Exit outer loop if ending found in this chunk
-                    # Debug: Print if nothing specific was found in this chunk
-                    # if not found_activation and not is_listening.is_set() and segment_text_list:
-                    #      print(f"❌ Heard (no activation): {' '.join(segment_text_list)}")
+                            if ENDING_PHRASE in normalized:
+                                print(f"[Transcribe] Heard potential ending: '{raw_text}'")
+                                final_transcript = full_command_transcript.strip()
+                                result_queue.put(("ENDING_FOUND", final_transcript))
+                                is_listening.clear() # <<< CLEAR STATE IMMEDIATELY
+                                found_ending_in_chunk = True
+                                full_command_transcript = "" # Reset command transcript
+                                break # Stop processing segments for this chunk
+
+                    # Update previous_segment_text for conditioning the *next* transcription
+                    if current_chunk_texts:
+                         previous_segment_text = " ".join(current_chunk_texts)
+                    else: # Reset if no text found (e.g. silence)
+                         previous_segment_text = ""
+
+
+                    # --- Buffer Management (After processing segments for a chunk) ---
+                    if found_ending_in_chunk:
+                        # Command finished, reset buffer completely
+                        print("[Buffer Manage] Command ended. Resetting audio buffer.")
+                        audio_buffer = np.array([], dtype=np.float32)
+                        break # Exit chunk processing loop immediately
+                    elif not is_listening.is_set():
+                         # Still waiting for activation (or just finished command): keep only overlap
+                         audio_buffer = samples_to_keep_after
+                    else:
+                         # Listening for command: keep overlap for context
+                         audio_buffer = samples_to_keep_after
 
 
             except queue.Empty:
-                # Queue was empty for the timeout duration, just loop again
+                # --- Handle Inactivity While Waiting for Activation ---
+                current_time = time.monotonic()
+                if not is_listening.is_set() and (current_time - last_activity_time > IDLE_TIMEOUT_SECONDS):
+                    if len(audio_buffer) > 0:
+                         print(f"[Buffer Manage] Idle timeout ({IDLE_TIMEOUT_SECONDS}s) while waiting. Clearing buffer.")
+                         audio_buffer = np.array([], dtype=np.float32)
+                         previous_segment_text = "" # Reset conditioning on idle clear
+                    last_activity_time = current_time # Reset timer
                 continue
+
             except Exception as e:
                 print(f"Error in transcription loop: {e}")
-                # Optional: add a small sleep to prevent tight loop on continuous errors
+                # Consider logging traceback here for debugging
+                # import traceback; traceback.print_exc()
                 time.sleep(0.1)
 
     finally:
@@ -152,83 +190,87 @@ def main():
     rec_thread.start()
     trans_thread.start()
 
+    last_partial_text = "" # Keep track to potentially reduce duplicate prints
+
     try:
         while True:
-            # State 1: Waiting for Activation
-            if not is_listening.is_set():
-                try:
-                    result_type, text = result_queue.get(timeout=1.0) # Check for results
-                    if result_type == "ACTIVATION_FOUND":
-                        print(f"\n✅ Activation Detected: '{text}'")
-                        turn_on_led() # Turn on LED upon activation
-                        is_listening.set() # Set the flag
+            try:
+                # Check for results from the transcription thread
+                result_type, text = result_queue.get(timeout=1.0)
+
+                # --- State Machine based on Results ---
+                if result_type == "ACTIVATION_FOUND":
+                    # Check if we are *not already* listening to avoid redundant actions
+                    if not is_listening.is_set():
+                        print(f"\n✅ Activation Detected by Main: '{text}'")
+                        turn_on_led()
+                        is_listening.set() # Ensure state is set here too
                         print("🎧 Listening for command (say 'thank you' to stop)...")
-                        # Clear the queue slightly to avoid immediate processing of lingering activation phrase audio
+                        # --- Clear queues to remove stale data ---
+                        print("[Queue Clear] Clearing queues after activation...")
                         while not audio_queue.empty():
                             try: audio_queue.get_nowait()
                             except queue.Empty: break
                         while not result_queue.empty():
                              try: result_queue.get_nowait()
                              except queue.Empty: break
+                        print("[Queue Clear] Queues cleared.")
+                        last_partial_text = "" # Reset last printed text
 
-                except queue.Empty:
-                    # No activation detected yet, continue waiting
-                    pass
+                elif result_type == "PARTIAL_TRANSCRIPT":
+                    # Only process/print if we are actually in listening state
+                    if is_listening.is_set():
+                        # Optional: Basic check to reduce printing exact duplicates consecutively
+                        if text != last_partial_text:
+                             print(f"🗣️ Heard: {text}")
+                             last_partial_text = text
 
-            # State 2: Listening for Command / Ending Phrase
-            if is_listening.is_set():
-                try:
-                    result_type, text = result_queue.get(timeout=1.0) # Check for results
-
-                    if result_type == "PARTIAL_TRANSCRIPT":
-                        print(f"🗣️ Heard: {text}") # Print intermediate results
-
-                    elif result_type == "ENDING_FOUND":
-                        print(f"\n🙏 Ending phrase detected.")
+                elif result_type == "ENDING_FOUND":
+                     # Only process if we were previously listening
+                     if is_listening.is_set():
+                        print(f"\n🙏 Ending phrase detected by Main.")
                         print(f"📝 Full Command Transcript: {text}")
-                        turn_off_led() # Turn off LED
-                        is_listening.clear() # Go back to waiting state
+                        turn_off_led()
+                        is_listening.clear() # Ensure state is clear
+                        # Buffer clearing now happens inside transcribe_audio
                         print(f"\n🎙️ Waiting for activation phrase: '{ACTIVATION_PHRASE}'...")
-                        # Optional: Save the full transcript to a file here if needed
+                        last_partial_text = "" # Reset last printed text
 
-                    # Ignore any activation phrases heard while already listening
-                    elif result_type == "ACTIVATION_FOUND":
-                         pass # Already active, do nothing
+            except queue.Empty:
+                # No results from queue, just loop again
+                pass
 
-                except queue.Empty:
-                    # No new transcript part or ending phrase, continue listening
-                    pass
-
-            # Allow a small sleep to prevent high CPU usage in the main loop if queues are constantly empty
-            time.sleep(0.05)
-
+            # Add a small sleep if result queue was empty to prevent busy-waiting
+            # time.sleep(0.05) # Moved sleep to prevent delay after processing item
 
     except KeyboardInterrupt:
         print("\n🛑 Ctrl+C detected. Stopping threads...")
     except Exception as e:
         print(f"An error occurred in the main loop: {e}")
+        # Consider logging traceback here
+        # import traceback; traceback.print_exc()
     finally:
-        # Signal threads to stop and wait for them
+        # --- Cleanup ---
+        print("Initiating shutdown...")
         stop_event.set()
         if is_listening.is_set():
-            turn_off_led() # Ensure LED is off on exit
+            turn_off_led() # Ensure LED is off
+
         print("Waiting for recording thread to finish...")
-        rec_thread.join()
+        if rec_thread and rec_thread.is_alive(): rec_thread.join(timeout=1.0) # Shorter timeout
         print("Waiting for transcription thread to finish...")
-        trans_thread.join()
+        if trans_thread and trans_thread.is_alive(): trans_thread.join(timeout=2.0)
+
         print("Program finished.")
 
 # --- Run Main ---
 if __name__ == "__main__":
-    # Add a check for microphone availability (optional but good practice)
     try:
         print("Available audio devices:", sd.query_devices())
-        # You might want to set a specific device index using sd.default.device
-        # sd.default.device = [input_device_index, output_device_index]
         print(f"Using default input device: {sd.query_devices(kind='input')['name']}")
     except Exception as e:
         print(f"Error querying audio devices: {e}")
         print("Please ensure you have a microphone connected and configured.")
-        exit()
+        sys.exit(1)
 
     main()

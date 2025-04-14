@@ -1,11 +1,14 @@
 {
-    "name": "Cranberry Cooler",
+    "name": "Classic Rum & Coke",
     "recipe": [
         {
-            "Cran juice": 4
+            "Rum": 1.5
         },
         {
-            "Soda water": 2
+            "Coke": 4
+        },
+        {
+            "Lime juice": 0.5
         }
     ]
 }

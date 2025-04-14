@@ -3,7 +3,7 @@ import openai
 import json
 
 # Set your OpenAI API key securely, ideally via environment variable
-openai.api_key = ""  # Make sure the environment variable is set properly
+openai.api_key = ""
 
 # This function should be explicitly called to process the menu and handle the OpenAI API call
 def menu_change(current_drink, input_change):
