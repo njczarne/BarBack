@@ -14,7 +14,7 @@ from voice_leds import turn_on_led, turn_off_led
 # --- Config ---
 SAMPLERATE = 44100
 CHANNELS = 1
-DURATION = 3  # seconds per chunk
+# DURATION = 4 # Removed - duration is now set per-phase
 TEMP_FILE_DIR = "temp_audio"
 MODEL_SIZE = "tiny.en"
 DEVICE = "cpu"
@@ -98,7 +98,7 @@ def cleanup_temp_files():
         except OSError:
              pass
         except FileNotFoundError:
-            pass
+             pass
     print("Cleanup finished.")
 
 
@@ -109,6 +109,7 @@ def record_to_wav(duration, samplerate, channels):
     try:
         recording = sd.rec(int(duration * samplerate), samplerate=samplerate,
                            channels=channels, dtype='int16', blocking=True)
+        # recording = recording * 0.9 # Example gain adjustment (if needed)
         filename = os.path.join(TEMP_FILE_DIR, f"rec_{uuid.uuid4()}.wav")
         with wave.open(filename, 'wb') as wf:
             wf.setnchannels(channels)
@@ -124,7 +125,7 @@ def normalize(text):
     """Normalizes text."""
     return re.sub(r'[^a-z\s]', '', text.lower()).strip()
 
-# --- Transcription Worker (Mostly Unchanged) ---
+# --- Transcription Worker ---
 
 def transcription_worker():
     """Background thread worker."""
@@ -182,6 +183,7 @@ def transcription_worker():
 def listen_for_phrase(activation_phrase):
     """
     Listens continuously until the activation phrase is detected.
+    Uses a 3-second recording duration.
     Assumes the worker thread is running.
     Returns True if phrase detected, False if interrupted.
     """
@@ -200,7 +202,9 @@ def listen_for_phrase(activation_phrase):
     try:
         while not stop_event.is_set(): # Use global stop_event
             print(f"Recording (Listening for \"{activation_phrase}\")...") # Keep print inside loop
-            current_filename = record_to_wav(DURATION, SAMPLERATE, CHANNELS)
+            # --- Use duration 3 ---
+            current_filename = record_to_wav(3, SAMPLERATE, CHANNELS)
+            # --- -------------- ---
             if not current_filename:
                 time.sleep(0.5) # Wait on recording error
                 continue
@@ -237,7 +241,8 @@ def listen_for_phrase(activation_phrase):
 def listen_until_ending(ending_phrase):
     """
     Listens for commands after activation, accumulating transcript until
-    the ending phrase is detected. Assumes worker thread is running.
+    the ending phrase is detected. Uses a 5-second recording duration.
+    Assumes worker thread is running.
     Returns the full transcript or None if interrupted.
     """
     global latest_filename_for_worker
@@ -257,7 +262,9 @@ def listen_until_ending(ending_phrase):
     try:
         while not stop_event.is_set(): # Use global stop_event
              # No print before recording in this state per previous request
-            current_filename = record_to_wav(DURATION, SAMPLERATE, CHANNELS)
+            # --- Use duration 5 ---
+            current_filename = record_to_wav(5, SAMPLERATE, CHANNELS)
+            # --- -------------- ---
             if not current_filename:
                 time.sleep(0.5)
                 continue
@@ -332,12 +339,12 @@ if __name__ == "__main__":
                  print("Command listener interrupted.")
                  break
             else:
-                # Successfully got command
-                print(f"\n--- Command Processing ---")
-                print(f"Commands heard: {full_command}")
-                print(f"--- Ready for next command ---")
-                # Add a small delay before listening again (optional)
-                time.sleep(0.5)
+                 # Successfully got command
+                 print(f"\n--- Command Processing ---")
+                 print(f"Commands heard: {full_command}")
+                 print(f"--- Ready for next command ---")
+                 # Add a small delay before listening again (optional)
+                 time.sleep(0.5)
 
     except Exception as e:
         print(f"An unexpected error occurred in the main loop: {e}")

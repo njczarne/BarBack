@@ -37,6 +37,7 @@ def menu_change(current_drink, input_change):
     Only use these ingredients (Do not add any other ingredients, even if the user asks for it):
     Rum, Tequila, Soda water, Coke, Lime juice, Cranberry juice
     Do not make a drink more than 10 ounces.
+    If a user requests an ingredient we don't have, use the most similar one instead
     
     Common Transciption errors
     Soda water: "Sort of water", "So the water"
